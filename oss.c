@@ -225,6 +225,17 @@ static void printPCB(){
 	
 	return;
 }
+static void signalHandler(int sig){
+	printf("%s: signaled with %d\n",sig);
+	int i;
+	for(i == 0; i < simul; i++){
+		if(pcb[i].occupied != 0){
+			kill(pcb[i].pid, SIGKILL);
+		}
+	}
+
+	exit(1);
+}
 int main(int argc, char** argv){
 	program = argv[0];
 
@@ -265,6 +276,10 @@ int main(int argc, char** argv){
 
 	if(createSHM() == -1)
 		return EXIT_FAILURE;
+	
+	signal(SIGINT, signalHandler);
+	signal(SIGALRM, signalHandler);
+	alarm(EXITTIME);
 	
 	nextFork.tv_sec = rand() % timeLimit + 1;
 	nextFork.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL + 1; 
