@@ -13,4 +13,4 @@ oss: $(OBJ)
 worker: $(OBJ)
 	$(CC) $(CFLAGS) -lm -o $@ $@.o
 clean:
-	rm -rf oss worker *.log *.o 
+	rm -rf oss worker *.log *.o a.out 

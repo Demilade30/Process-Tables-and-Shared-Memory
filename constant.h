@@ -7,7 +7,7 @@
 #define DEFAULT_NSEC_INTERVAL 1000000
 
 #define SEC_INCRE 0
-#define NSEC_INCRE 50000000
+#define NSEC_INCRE 50000
 
 #define EXITTIME 60
 const key_t keySHM = 10032023;

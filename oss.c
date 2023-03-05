@@ -18,7 +18,7 @@ static int timeLimit = DEFAULT_SEC_INTERVAL;
 
 //shareMemory
 static struct timespec * shareClock = NULL;
-int shmid = -1;
+static int shmid = -1;
 
 static int curRun = 0;
 static int userForked = 0;
@@ -34,7 +34,7 @@ static void addTime(struct timespec *a, const struct timespec *b){
 
   	a->tv_sec += b->tv_sec;
   	a->tv_nsec += b->tv_nsec;
-  	if (a->tv_nsec > max_ns)
+ 	while(a->tv_nsec >= max_ns)
   	{
     		a->tv_sec++;
     		a->tv_nsec -= max_ns;
@@ -43,7 +43,12 @@ static void addTime(struct timespec *a, const struct timespec *b){
 static void subTime(struct timespec *a, struct timespec *b, struct timespec *c){
 	//function to find time difference
 	if (b->tv_nsec < a->tv_nsec){
-    		c->tv_sec = b->tv_sec - a->tv_sec - 1;
+               	if(b->tv_sec < a->tv_sec){
+                	c->tv_sec = 0;
+                        c->tv_nsec = 0;
+                        return;
+                }
+		c->tv_sec = b->tv_sec - a->tv_sec - 1;
     		c->tv_nsec = a->tv_nsec - b->tv_nsec;
   	}else{
     		c->tv_sec = b->tv_sec - a->tv_sec;
@@ -126,8 +131,8 @@ static void deallocateSHM(){
 }
 static int checkTimer(){
 	struct timespec t = {.tv_sec = 0, .tv_nsec = 0};
-	t.tv_sec = rand() % timeLimit + 1;
-	t.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL + 1;
+	t.tv_sec = rand() % timeLimit + shareClock->tv_sec - nextFork.tv_sec;
+	t.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL;
 
 	if(shareClock->tv_sec > nextFork.tv_sec || (shareClock->tv_sec == nextFork.tv_nsec && shareClock->tv_sec >= nextFork.tv_nsec)){
 		addTime(&nextFork, &t);
@@ -169,14 +174,15 @@ static void startNewWorker(){
 			fprintf(stderr,"%s: failed while getting index to start a new worker.\n", program);
 			exit(EXIT_FAILURE);
 		}
-
+		
+		fflush(stdout);
 		pid_t pid = fork();
 		if(pid == -1){
 			fprintf(stderr,"%s: failed to fork a process.",program);
 			exit(EXIT_FAILURE);
 		}else if(pid == 0){
 			//Child process
-			int randSec = rand() % 10 + 1;
+			int randSec = rand() % 100 + 5;
 			int randNsec = rand() % 1000000000 + 1;
 
 			char sec[3];
@@ -203,20 +209,28 @@ static void startNewWorker(){
 
 		return;
 	}	
+
+	struct timespec t = {.tv_sec = 0, .tv_nsec = 0};
+        t.tv_sec = rand() % timeLimit + + shareClock->tv_sec - nextFork.tv_sec;
+        t.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL + shareClock->tv_nsec - nextFork.tv_nsec;
 	
+	addTime(&nextFork, &t);	
 	addTime(shareClock, &increTime);	
 }
 
 static void printPCB(){
 	struct timespec timeDiff = {.tv_sec = 0, .tv_nsec = 0};
-	subTime(shareClock, &lastCheck, &timeDiff);
+	subTime(&lastCheck, shareClock, &timeDiff);
 	
 	if(timeDiff.tv_sec < 0 || timeDiff.tv_nsec < 500000000)
 		return;
 	
+	lastCheck.tv_sec = shareClock->tv_sec;
+	lastCheck.tv_nsec = shareClock->tv_nsec;
+
 	printf("OSS PID: %d, SysClockS: %lu, SysclockNano: %lu\n",getpid(), shareClock->tv_sec, shareClock->tv_nsec);
 	printf("Process Table:\n");
-	printf("Entry\t\tOccupied\t\tPID\t\tStartS\t\tStartN\n");
+	printf("Entry\t\tOccupied\tPID\t\tStartS\t\tStartN\n");
 	
 	int i;
 	for(i = 0; i < simul; i++){
@@ -226,9 +240,9 @@ static void printPCB(){
 	return;
 }
 static void signalHandler(int sig){
-	printf("%s: signaled with %d\n",sig);
+	printf("%s: signaled with %d\n",program,sig);
 	int i;
-	for(i == 0; i < simul; i++){
+	for(i = 0; i < simul; i++){
 		if(pcb[i].occupied != 0){
 			kill(pcb[i].pid, SIGKILL);
 		}
@@ -283,6 +297,7 @@ int main(int argc, char** argv){
 	
 	nextFork.tv_sec = rand() % timeLimit + 1;
 	nextFork.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL + 1; 
+	
 
 	//start forking
 	while(userForked < proc){
@@ -294,6 +309,7 @@ int main(int argc, char** argv){
 	}		
 
 	while(curRun > 0){
+		addTime(shareClock, &increTime);
 		checkIfChildTerm();
 		printPCB();	
 	}
