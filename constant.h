@@ -9,6 +9,7 @@
 #define SEC_INCRE 0
 #define NSEC_INCRE 50000000
 
+#define EXITTIME 60
 const key_t keySHM = 10032023;
 
 struct PCB{
