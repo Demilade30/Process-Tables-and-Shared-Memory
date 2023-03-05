@@ -20,8 +20,36 @@ static int timeLimit = DEFAULT_SEC_INTERVAL;
 static struct timespec * shareClock = NULL;
 int shmid = -1;
 
+static int curRun = 0;
+static int userForked = 0;
 static struct PCB * pcb = NULL;
 
+static struct timespec nextFork = {.tv_sec = 0, .tv_nsec = 0};
+static struct timespec increTime = {.tv_sec = SEC_INCRE, .tv_nsec = NSEC_INCRE};
+static struct timespec lastCheck = {.tv_sec = 0, .tv_nsec = 0};
+
+static void addTime(struct timespec *a, const struct timespec *b){
+	//function to add time to the clock
+	static const unsigned int max_ns = 1000000000;
+
+  	a->tv_sec += b->tv_sec;
+  	a->tv_nsec += b->tv_nsec;
+  	if (a->tv_nsec > max_ns)
+  	{
+    		a->tv_sec++;
+    		a->tv_nsec -= max_ns;
+  	}
+}
+static void subTime(struct timespec *a, struct timespec *b, struct timespec *c){
+	//function to find time difference
+	if (b->tv_nsec < a->tv_nsec){
+    		c->tv_sec = b->tv_sec - a->tv_sec - 1;
+    		c->tv_nsec = a->tv_nsec - b->tv_nsec;
+  	}else{
+    		c->tv_sec = b->tv_sec - a->tv_sec;
+    		c->tv_nsec = b->tv_nsec - a->tv_nsec;
+  	}
+}
 static void helpMenu(){
 	printf("Usage: ./oss [-h] [-n proc] [-s simul] [-t iter]\n");
         printf("\t\t-h describes how the project should run and then, terminates.\n");
@@ -30,7 +58,22 @@ static void helpMenu(){
 	printf("\t\t-t timeLimit: ceilling limit of the time interval that the oss will fork worker process\n");
 	printf("\tIf any of the parameter above are not defined by user, the default value for them is 1\n");
 }
+static int findIndex(pid_t pid){
+	int i;
+	if(pid == 0){
+		for(i = 0; i < simul; i++){
+			if(pcb[i].occupied == 0)
+				return i;
+		}
+	}else{
+		for(i = 0; i < simul; i++){
+			if(pcb[i].pid == pid)
+				return i;
+		}
+	}
 
+	return -1;
+}
 static int createSHM(){
 	shmid = shmget(keySHM, sizeof(struct timespec), IPC_CREAT | IPC_EXCL | S_IRWXU);
 	if(shmid < 0){
@@ -54,6 +97,13 @@ static int createSHM(){
 		perror("Error");
 		return -1;
 	}
+	int i;
+	for(i = 0; i < simul; i++){
+		pcb[i].occupied = 0;
+		pcb[i].pid = 0;
+		pcb[i].startClock.tv_sec = 0;
+		pcb[i].startClock.tv_nsec = 0;
+	}
 	return 0;
 }
 static void deallocateSHM(){
@@ -74,12 +124,112 @@ static void deallocateSHM(){
 	if(pcb != NULL)
 		free(pcb);
 }
+static int checkTimer(){
+	struct timespec t = {.tv_sec = 0, .tv_nsec = 0};
+	t.tv_sec = rand() % timeLimit + 1;
+	t.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL + 1;
+
+	if(shareClock->tv_sec > nextFork.tv_sec || (shareClock->tv_sec == nextFork.tv_nsec && shareClock->tv_sec >= nextFork.tv_nsec)){
+		addTime(&nextFork, &t);
+		return 1; //time to Fork
+	}
+
+	//increment the clock
+	addTime(shareClock, &increTime);
+	return 0;		
+}
+static void checkIfChildTerm(){
+	int status;
+
+	pid_t pid = waitpid(-1, &status, WNOHANG);
+	
+	if(pid > 0){
+		int index = findIndex(pid);
+		
+		if(index == -1){
+			fprintf(stderr,"%s: cannot clear pcb for pid %d.\n",program, pid);
+			exit(EXIT_FAILURE);
+		}
+
+		//Reset entry in PCB
+		pcb[index].occupied = 0;
+		pcb[index].pid = 0;
+		pcb[index].startClock.tv_sec = 0;
+		pcb[index].startClock.tv_nsec = 0;
+
+		curRun--;		
+	}
+
+}
+static void startNewWorker(){
+	if(curRun < simul){
+		int index = findIndex(0);
+
+		if(index == -1){
+			fprintf(stderr,"%s: failed while getting index to start a new worker.\n", program);
+			exit(EXIT_FAILURE);
+		}
+
+		pid_t pid = fork();
+		if(pid == -1){
+			fprintf(stderr,"%s: failed to fork a process.",program);
+			exit(EXIT_FAILURE);
+		}else if(pid == 0){
+			//Child process
+			int randSec = rand() % 10 + 1;
+			int randNsec = rand() % 1000000000 + 1;
+
+			char sec[3];
+			char nsec[11];
+
+			snprintf(sec, sizeof(sec), "%d", randSec);
+			snprintf(nsec, sizeof(nsec), "%d", randNsec);
+			execl("./worker", "./worker", sec, nsec, NULL);
+
+			fprintf(stderr,"%s: failed to execl. ",program);
+			perror("Error");
+			exit(EXIT_FAILURE);
+		}else{
+			//Parent process
+			curRun++;
+			userForked++;
+
+			pcb[index].occupied = 1;
+			pcb[index].pid = pid;
+			pcb[index].startClock.tv_sec = shareClock->tv_sec;
+			pcb[index].startClock.tv_nsec = shareClock->tv_nsec;
+
+		}
+
+		return;
+	}	
+	
+	addTime(shareClock, &increTime);	
+}
+
+static void printPCB(){
+	struct timespec timeDiff = {.tv_sec = 0, .tv_nsec = 0};
+	subTime(shareClock, &lastCheck, &timeDiff);
+	
+	if(timeDiff.tv_sec < 0 || timeDiff.tv_nsec < 500000000)
+		return;
+	
+	printf("OSS PID: %d, SysClockS: %lu, SysclockNano: %lu\n",getpid(), shareClock->tv_sec, shareClock->tv_nsec);
+	printf("Process Table:\n");
+	printf("Entry\t\tOccupied\t\tPID\t\tStartS\t\tStartN\n");
+	
+	int i;
+	for(i = 0; i < simul; i++){
+		printf("%d\t\t%d\t\t%d\t\t%lu\t\t%lu\n", i, pcb[i].occupied, pcb[i].pid, pcb[i].startClock.tv_sec, pcb[i].startClock.tv_nsec);
+	}
+	
+	return;
+}
 int main(int argc, char** argv){
 	program = argv[0];
 
 	int opt = 0;
-	//int userForked = 0;
-	
+
 	//Register exit function to deallocate memory
 	atexit(deallocateSHM);
 
@@ -115,8 +265,23 @@ int main(int argc, char** argv){
 
 	if(createSHM() == -1)
 		return EXIT_FAILURE;
+	
+	nextFork.tv_sec = rand() % timeLimit + 1;
+	nextFork.tv_nsec = rand() % DEFAULT_NSEC_INTERVAL + 1; 
 
-			
+	//start forking
+	while(userForked < proc){
+		if(checkTimer() != 0)
+			startNewWorker();
+		
+		checkIfChildTerm();	
+		printPCB();	
+	}		
+
+	while(curRun > 0){
+		checkIfChildTerm();
+		printPCB();	
+	}
 	
 
 	return EXIT_SUCCESS;

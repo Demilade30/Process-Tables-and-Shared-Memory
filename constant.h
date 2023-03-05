@@ -6,13 +6,16 @@
 #define DEFAULT_SEC_INTERVAL 1
 #define DEFAULT_NSEC_INTERVAL 1000000
 
+#define SEC_INCRE 0
+#define NSEC_INCRE 50000000
+
 const key_t keySHM = 10032023;
 
 struct PCB{
 	int occupied;
 	pid_t pid;
-	int startSeconds;
-	int startNano;
+	
+	struct timespec startClock;
 };
 
 
